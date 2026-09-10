@@ -1,193 +1,158 @@
-import { Component } from '@angular/core';
+import { Component, computed, inject, signal } from '@angular/core';
+import { RouterLink } from '@angular/router';
+import { StoreService } from '../../core/services/store.service';
+import { Action, ActionStatus, Priority } from '../../core/models/actionsync.model';
 
-type ActionStatus = 'Open' | 'In Progress' | 'Completed';
-type ActionPriority = 'High' | 'Medium' | 'Low';
-
-interface ActionItem {
+export interface ActionItemView {
   id: string;
   title: string;
   description: string;
   owner: string;
+  ownerId: string;
   ownerInitials: string;
+  ownerColor: string;
   meeting: string;
   meetingId: string;
   dueDate: string;
-  priority: ActionPriority;
-  status: ActionStatus;
+  priority: string;
+  status: string;
   confidence: number;
   createdAt: string;
+  raw: Action;
 }
 
 @Component({
   selector: 'app-action-workspace',
   standalone: true,
+  imports: [RouterLink],
   template: `
     <div class="actions-page">
 
       <!-- HEADER -->
-
       <section class="page-header">
-
         <div>
           <div class="eyebrow">WORKSPACE</div>
-
-          <h1>Actions</h1>
-
+          <h1>Actions & Commitments</h1>
           <p>
-            Track commitments extracted from your meetings.
+            Track, assign, and reconcile action items extracted directly from meeting dialogues.
           </p>
         </div>
 
-        <button class="primary-button" (click)="createAction()">
+        <button class="primary-button" (click)="openCreateModal()">
           + New Action
         </button>
-
       </section>
 
-
-      <!-- SUMMARY -->
-
+      <!-- SUMMARY COUNTERS -->
       <section class="summary-grid">
-
         <div class="summary-card">
           <div class="summary-icon purple">✓</div>
-
           <div>
             <span>Total Actions</span>
-            <strong>{{ actions.length }}</strong>
+            <strong>{{ store.actions().length }}</strong>
           </div>
         </div>
 
         <div class="summary-card">
           <div class="summary-icon blue">◷</div>
-
           <div>
-            <span>Open</span>
-            <strong>{{ openCount }}</strong>
+            <span>My Tasks</span>
+            <strong>{{ myTasksCount() }}</strong>
           </div>
         </div>
 
         <div class="summary-card">
           <div class="summary-icon orange">!</div>
-
           <div>
-            <span>Due Soon</span>
-            <strong>{{ dueSoonCount }}</strong>
+            <span>Due Soon / Overdue</span>
+            <strong>{{ store.dueSoonActions().length + store.overdueActions().length }}</strong>
           </div>
         </div>
 
         <div class="summary-card">
           <div class="summary-icon green">✓</div>
-
           <div>
             <span>Completed</span>
-            <strong>{{ completedCount }}</strong>
+            <strong>{{ store.completedActions().length }}</strong>
           </div>
         </div>
-
       </section>
 
-
       <!-- TOOLBAR -->
-
       <section class="toolbar">
-
         <div class="tabs">
-
-          <button
-            [class.active]="filter === 'all'"
-            (click)="setFilter('all')"
-          >
+          <button [class.active]="filter() === 'all'" (click)="filter.set('all')">
             All
-            <span>{{ actions.length }}</span>
+            <span>{{ store.actions().length }}</span>
           </button>
 
-          <button
-            [class.active]="filter === 'open'"
-            (click)="setFilter('open')"
-          >
+          <button [class.active]="filter() === 'my'" (click)="filter.set('my')">
+            My Tasks
+            <span>{{ myTasksCount() }}</span>
+          </button>
+
+          <button [class.active]="filter() === 'open'" (click)="filter.set('open')">
             Open
-            <span>{{ openCount }}</span>
+            <span>{{ store.openActions().length }}</span>
           </button>
 
-          <button
-            [class.active]="filter === 'due'"
-            (click)="setFilter('due')"
-          >
+          <button [class.active]="filter() === 'due'" (click)="filter.set('due')">
             Due Soon
-            <span>{{ dueSoonCount }}</span>
+            <span>{{ store.dueSoonActions().length }}</span>
           </button>
 
-          <button
-            [class.active]="filter === 'completed'"
-            (click)="setFilter('completed')"
-          >
+          <button [class.active]="filter() === 'overdue'" (click)="filter.set('overdue')">
+            Overdue
+            <span>{{ store.overdueActions().length }}</span>
+          </button>
+
+          <button [class.active]="filter() === 'completed'" (click)="filter.set('completed')">
             Completed
-            <span>{{ completedCount }}</span>
+            <span>{{ store.completedActions().length }}</span>
           </button>
-
         </div>
 
-
         <div class="toolbar-actions">
-
           <div class="search-box">
             <span>⌕</span>
-
             <input
               type="text"
-              placeholder="Search actions..."
-              [(value)]="searchTerm"
+              placeholder="Search actions, assignees, meetings..."
+              [value]="searchTerm()"
               (input)="onSearch($event)"
             />
           </div>
 
-          <button class="filter-button">
-            ≡ Filter
-          </button>
-
-          <button class="filter-button">
-            ↕ Sort
-          </button>
-
+          <div class="priority-select">
+            <select [value]="priorityFilter()" (change)="priorityFilter.set($any($event.target).value)">
+              <option value="all">All Priorities</option>
+              <option value="critical">Critical</option>
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
+            </select>
+          </div>
         </div>
-
       </section>
 
-
-      <!-- CONTENT -->
-
+      <!-- CONTENT LAYOUT (List + Detail Panel) -->
       <div class="content-layout">
 
         <!-- ACTION LIST -->
-
         <section class="action-list">
-
-          @if (filteredActions.length === 0) {
-
+          @if (filteredActions().length === 0) {
             <div class="empty-state">
               <div class="empty-icon">✓</div>
-
               <h2>No actions found</h2>
-
-              <p>
-                Try changing your filter or search term.
-              </p>
+              <p>Try adjusting your search criteria, priority filter, or view tab.</p>
             </div>
-
           } @else {
-
-            @for (
-              action of filteredActions;
-              track action.id
-            ) {
-
+            @for (action of filteredActions(); track action.id) {
               <article
                 class="action-card"
-                [class.selected]="selectedAction?.id === action.id"
+                [class.selected]="selectedAction()?.id === action.id"
                 (click)="selectAction(action)"
               >
-
                 <div
                   class="checkbox"
                   [class.checked]="action.status === 'Completed'"
@@ -198,50 +163,39 @@ interface ActionItem {
                   }
                 </div>
 
-
                 <div class="action-body">
-
                   <div class="action-title-row">
-
-                    <h2
-                      [class.completed-title]="
-                        action.status === 'Completed'
-                      "
-                    >
+                    <h2 [class.completed-title]="action.status === 'Completed'">
                       {{ action.title }}
                     </h2>
 
                     <span
                       class="priority"
-                      [class.high]="action.priority === 'High'"
-                      [class.medium]="action.priority === 'Medium'"
-                      [class.low]="action.priority === 'Low'"
+                      [class.critical]="action.priority.toLowerCase() === 'critical'"
+                      [class.high]="action.priority.toLowerCase() === 'high'"
+                      [class.medium]="action.priority.toLowerCase() === 'medium'"
+                      [class.low]="action.priority.toLowerCase() === 'low'"
                     >
                       {{ action.priority }}
                     </span>
-
                   </div>
-
 
                   <p class="description">
                     {{ action.description }}
                   </p>
 
-
                   <div class="action-meta">
-
                     <span class="owner">
-                      <span class="mini-avatar">
+                      <span class="mini-avatar" [style.background]="action.ownerColor">
                         {{ action.ownerInitials }}
                       </span>
-
                       {{ action.owner }}
                     </span>
 
                     <span>·</span>
 
-                    <span>
-                      {{ action.meeting }}
+                    <span class="meta-meeting">
+                      ◫ {{ action.meeting }}
                     </span>
 
                     <span>·</span>
@@ -250,268 +204,231 @@ interface ActionItem {
                       class="due"
                       [class.overdue]="isOverdue(action)"
                     >
-                      {{ action.dueDate }}
+                      Due {{ action.dueDate }}
                     </span>
-
                   </div>
-
                 </div>
 
-
                 <div class="action-right">
-
                   <span
-                    class="status"
+                    class="status-pill"
                     [class.open]="action.status === 'Open'"
                     [class.progress]="action.status === 'In Progress'"
+                    [class.review]="action.status === 'Review'"
                     [class.completed]="action.status === 'Completed'"
                   >
                     {{ action.status }}
                   </span>
 
                   <span class="confidence">
-                    {{ action.confidence }}%
+                    {{ action.confidence }}% conf
                   </span>
 
                   <span class="arrow">→</span>
-
                 </div>
-
               </article>
-
             }
-
           }
-
         </section>
 
-
         <!-- DETAIL PANEL -->
-
-        @if (selectedAction) {
-
+        @if (selectedAction()) {
           <aside class="detail-panel">
-
             <div class="detail-header">
-
               <div>
-                <span class="detail-label">
-                  ACTION DETAIL
-                </span>
-
-                <h2>Action</h2>
+                <span class="detail-label">ACTION DETAIL</span>
+                <h2>Commitment</h2>
               </div>
-
-              <button
-                class="close-button"
-                (click)="clearSelection()"
-              >
-                ×
-              </button>
-
+              <button class="close-button" (click)="selectedAction.set(null)">×</button>
             </div>
 
-
             <div class="detail-content">
-
               <span
                 class="priority"
-                [class.high]="selectedAction.priority === 'High'"
-                [class.medium]="selectedAction.priority === 'Medium'"
-                [class.low]="selectedAction.priority === 'Low'"
+                [class.critical]="selectedAction()!.priority.toLowerCase() === 'critical'"
+                [class.high]="selectedAction()!.priority.toLowerCase() === 'high'"
+                [class.medium]="selectedAction()!.priority.toLowerCase() === 'medium'"
+                [class.low]="selectedAction()!.priority.toLowerCase() === 'low'"
               >
-                {{ selectedAction.priority }} Priority
+                {{ selectedAction()!.priority }} Priority
               </span>
 
+              <h3>{{ selectedAction()!.title }}</h3>
+              <p class="detail-description">{{ selectedAction()!.description }}</p>
 
-              <h3>
-                {{ selectedAction.title }}
-              </h3>
-
-
-              <p class="detail-description">
-                {{ selectedAction.description }}
-              </p>
-
-
+              <!-- STATUS CONTROL -->
               <div class="detail-section">
-
-                <span class="section-label">
-                  STATUS
-                </span>
-
+                <span class="section-label">STATUS</span>
                 <div class="status-control">
-
                   <button
-                    [class.active]="
-                      selectedAction.status === 'Open'
-                    "
-                    (click)="changeStatus('Open')"
+                    [class.active]="selectedAction()!.status === 'Open'"
+                    (click)="changeStatus('backlog')"
                   >
-                    Open
+                    Backlog
                   </button>
-
                   <button
-                    [class.active]="
-                      selectedAction.status === 'In Progress'
-                    "
-                    (click)="changeStatus('In Progress')"
+                    [class.active]="selectedAction()!.status === 'In Progress'"
+                    (click)="changeStatus('in-progress')"
                   >
                     In Progress
                   </button>
-
                   <button
-                    [class.active]="
-                      selectedAction.status === 'Completed'
-                    "
-                    (click)="changeStatus('Completed')"
+                    [class.active]="selectedAction()!.status === 'Review'"
+                    (click)="changeStatus('review')"
                   >
-                    Completed
+                    Review
                   </button>
-
+                  <button
+                    [class.active]="selectedAction()!.status === 'Completed'"
+                    (click)="changeStatus('done')"
+                  >
+                    Done
+                  </button>
                 </div>
-
               </div>
 
-
+              <!-- ASSIGNEE -->
               <div class="detail-section">
-
-                <span class="section-label">
-                  OWNER
-                </span>
-
+                <span class="section-label">ASSIGNEE</span>
                 <div class="detail-person">
-
-                  <div class="large-avatar">
-                    {{ selectedAction.ownerInitials }}
+                  <div class="large-avatar" [style.background]="selectedAction()!.ownerColor">
+                    {{ selectedAction()!.ownerInitials }}
                   </div>
-
                   <div>
-                    <strong>
-                      {{ selectedAction.owner }}
-                    </strong>
-
-                    <span>
-                      Action owner
-                    </span>
+                    <strong>{{ selectedAction()!.owner }}</strong>
+                    <span>Responsible Contributor</span>
                   </div>
-
                 </div>
-
               </div>
 
-
+              <!-- DEADLINE -->
               <div class="detail-section">
-
-                <span class="section-label">
-                  DEADLINE
-                </span>
-
+                <span class="section-label">DEADLINE</span>
                 <div class="deadline">
-                  <span class="calendar-icon">□</span>
-
+                  <span class="calendar-icon">📅</span>
                   <div>
-                    <strong>
-                      {{ selectedAction.dueDate }}
-                    </strong>
-
-                    <span
-                      [class.red]="isOverdue(selectedAction)"
-                    >
-                      {{ deadlineText(selectedAction) }}
+                    <strong>{{ selectedAction()!.dueDate }}</strong>
+                    <span [class.red]="isOverdue(selectedAction()!)">
+                      {{ deadlineText(selectedAction()!) }}
                     </span>
                   </div>
                 </div>
-
               </div>
 
-
+              <!-- SOURCE MEETING -->
               <div class="detail-section">
-
-                <span class="section-label">
-                  SOURCE MEETING
-                </span>
-
-                <div class="source-meeting">
-
-                  <div class="source-icon">
-                    ◫
-                  </div>
-
+                <span class="section-label">SOURCE MEETING</span>
+                <a [routerLink]="['/meetings', selectedAction()!.meetingId]" class="source-meeting">
+                  <div class="source-icon">◫</div>
                   <div>
-                    <strong>
-                      {{ selectedAction.meeting }}
-                    </strong>
-
-                    <span>
-                      Meeting analysis
-                    </span>
+                    <strong>{{ selectedAction()!.meeting }}</strong>
+                    <span>Jump to meeting analysis</span>
                   </div>
-
-                  <span class="source-arrow">
-                    →
-                  </span>
-
-                </div>
-
+                  <span class="source-arrow">→</span>
+                </a>
               </div>
 
-
+              <!-- AI CONFIDENCE -->
               <div class="detail-section">
-
-                <span class="section-label">
-                  AI CONFIDENCE
-                </span>
-
+                <span class="section-label">AI CONFIDENCE SCORE</span>
                 <div class="confidence-bar">
-
                   <div class="bar-background">
                     <div
                       class="bar-fill"
-                      [style.width.%]="selectedAction.confidence"
+                      [style.width.%]="selectedAction()!.confidence"
                     ></div>
                   </div>
-
-                  <strong>
-                    {{ selectedAction.confidence }}%
-                  </strong>
-
+                  <strong>{{ selectedAction()!.confidence }}%</strong>
                 </div>
-
                 <p class="confidence-help">
-                  Confidence that this commitment was correctly
-                  identified from the meeting.
+                  Confidence that this commitment and deadline were accurately identified from transcript context.
                 </p>
-
               </div>
-
             </div>
-
 
             <div class="detail-footer">
-
-              <button class="secondary-button">
-                Edit Action
+              <button class="delete-button" (click)="deleteCurrentAction()">
+                Delete
               </button>
-
-              <button
-                class="complete-button"
-                (click)="completeSelected()"
-              >
-                {{
-                  selectedAction.status === 'Completed'
-                    ? 'Reopen Action'
-                    : 'Mark Complete'
-                }}
+              <button class="complete-button" (click)="toggleCompleteSelected()">
+                {{ selectedAction()!.status === 'Completed' ? 'Reopen Action' : 'Mark Done' }}
               </button>
-
             </div>
-
           </aside>
-
         }
 
       </div>
+
+      <!-- CREATE ACTION MODAL -->
+      @if (showCreateModal()) {
+        <div class="modal-backdrop" (click)="showCreateModal.set(false)">
+          <div class="modal-window" (click)="$event.stopPropagation()">
+            <div class="modal-header">
+              <h2>New Action Commitment</h2>
+              <button class="close-button" (click)="showCreateModal.set(false)">×</button>
+            </div>
+
+            <div class="modal-body">
+              <div class="form-group">
+                <label>Action Title</label>
+                <input #newTitle type="text" placeholder="e.g., Deliver OAuth2 token revocation endpoints" />
+              </div>
+
+              <div class="form-group">
+                <label>Description</label>
+                <textarea #newDesc rows="3" placeholder="Specify deliverables, criteria, and scope..."></textarea>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label>Assignee</label>
+                  <select #newOwner>
+                    @for (u of store.users(); track u.id) {
+                      <option [value]="u.id">{{ u.name }} ({{ u.role }})</option>
+                    }
+                  </select>
+                </div>
+
+                <div class="form-group">
+                  <label>Priority</label>
+                  <select #newPri>
+                    <option value="critical">Critical</option>
+                    <option value="high" selected>High</option>
+                    <option value="medium">Medium</option>
+                    <option value="low">Low</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label>Due Date</label>
+                  <input #newDue type="text" placeholder="e.g., Mar 25, 2026" value="Mar 25, 2026" />
+                </div>
+
+                <div class="form-group">
+                  <label>Source Meeting</label>
+                  <select #newMeeting>
+                    @for (m of store.meetings(); track m.id) {
+                      <option [value]="m.id">{{ m.title }}</option>
+                    }
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <div class="modal-footer">
+              <button class="btn-cancel" (click)="showCreateModal.set(false)">Cancel</button>
+              <button
+                class="btn-save"
+                (click)="saveNewAction(newTitle.value, newDesc.value, newOwner.value, newPri.value, newDue.value, newMeeting.value)"
+              >
+                Create Action Item
+              </button>
+            </div>
+          </div>
+        </div>
+      }
 
     </div>
   `,
@@ -526,12 +443,13 @@ interface ActionItem {
     }
 
     /* HEADER */
-
     .page-header {
       display: flex;
       align-items: flex-start;
       justify-content: space-between;
-      margin-bottom: 25px;
+      margin-bottom: 24px;
+      flex-wrap: wrap;
+      gap: 16px;
     }
 
     .eyebrow {
@@ -546,7 +464,8 @@ interface ActionItem {
       margin: 0;
       color: #0f172a;
       font-size: 28px;
-      letter-spacing: -.5px;
+      font-weight: 750;
+      letter-spacing: -0.5px;
     }
 
     .page-header p {
@@ -556,7 +475,7 @@ interface ActionItem {
     }
 
     .primary-button {
-      padding: 10px 16px;
+      padding: 10px 18px;
       border: 0;
       border-radius: 8px;
       background: #4f46e5;
@@ -564,6 +483,7 @@ interface ActionItem {
       font-size: 12px;
       font-weight: 600;
       cursor: pointer;
+      transition: background 0.15s ease;
     }
 
     .primary-button:hover {
@@ -571,7 +491,6 @@ interface ActionItem {
     }
 
     /* SUMMARY */
-
     .summary-grid {
       display: grid;
       grid-template-columns: repeat(4, 1fr);
@@ -600,49 +519,35 @@ interface ActionItem {
       font-weight: 700;
     }
 
-    .summary-icon.purple {
-      background: #eef2ff;
-      color: #4f46e5;
-    }
-
-    .summary-icon.blue {
-      background: #eff6ff;
-      color: #2563eb;
-    }
-
-    .summary-icon.orange {
-      background: #fff7ed;
-      color: #ea580c;
-    }
-
-    .summary-icon.green {
-      background: #ecfdf5;
-      color: #059669;
-    }
-
-    .summary-card span,
-    .summary-card strong {
-      display: block;
-    }
+    .summary-icon.purple { background: #eef2ff; color: #4f46e5; }
+    .summary-icon.blue { background: #eff6ff; color: #2563eb; }
+    .summary-icon.orange { background: #fff7ed; color: #ea580c; }
+    .summary-icon.green { background: #ecfdf5; color: #059669; }
 
     .summary-card span {
+      display: block;
       color: #94a3b8;
       font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
     }
 
     .summary-card strong {
+      display: block;
       margin-top: 4px;
       color: #1e293b;
-      font-size: 19px;
+      font-size: 20px;
+      font-weight: 800;
     }
 
     /* TOOLBAR */
-
     .toolbar {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      margin-bottom: 12px;
+      margin-bottom: 14px;
+      gap: 12px;
+      flex-wrap: wrap;
     }
 
     .tabs {
@@ -656,32 +561,45 @@ interface ActionItem {
     .tabs button {
       border: 0;
       border-radius: 6px;
-      padding: 8px 11px;
+      padding: 7px 12px;
       background: transparent;
       color: #64748b;
-      font-size: 11px;
+      font-size: 12px;
       cursor: pointer;
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 6px;
     }
 
     .tabs button.active {
       background: white;
       color: #334155;
-      font-weight: 600;
-      box-shadow: 0 1px 3px #0000000c;
+      font-weight: 650;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
     }
 
     .tabs span {
-      margin-left: 4px;
-      color: #94a3b8;
+      background: #e2e8f0;
+      color: #64748b;
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 999px;
+    }
+
+    .tabs button.active span {
+      background: #eef2ff;
+      color: #4f46e5;
     }
 
     .toolbar-actions {
       display: flex;
-      gap: 7px;
+      gap: 8px;
+      align-items: center;
     }
 
     .search-box {
-      width: 210px;
+      width: 250px;
       display: flex;
       align-items: center;
       gap: 7px;
@@ -697,33 +615,28 @@ interface ActionItem {
       border: 0;
       outline: 0;
       color: #334155;
-      font-size: 11px;
+      font-size: 12px;
     }
 
-    .search-box input::placeholder {
-      color: #94a3b8;
-    }
-
-    .filter-button {
-      padding: 8px 11px;
+    .priority-select select {
+      padding: 7px 10px;
       border: 1px solid #e2e8f0;
       border-radius: 7px;
       background: white;
-      color: #64748b;
-      font-size: 11px;
-      cursor: pointer;
+      color: #475569;
+      font-size: 12px;
+      outline: 0;
     }
 
-    /* CONTENT */
-
+    /* CONTENT LAYOUT */
     .content-layout {
       display: grid;
       grid-template-columns: 1fr;
-      gap: 14px;
+      gap: 16px;
     }
 
     .content-layout:has(.detail-panel) {
-      grid-template-columns: minmax(0, 1fr) 370px;
+      grid-template-columns: minmax(0, 1fr) 390px;
     }
 
     .action-list {
@@ -735,35 +648,32 @@ interface ActionItem {
     .action-card {
       display: flex;
       align-items: center;
-      gap: 13px;
-      min-height: 88px;
-      padding: 15px 17px;
-      box-sizing: border-box;
+      gap: 14px;
+      min-height: 84px;
+      padding: 15px 18px;
       border: 1px solid #e2e8f0;
       border-radius: 10px;
       background: white;
       cursor: pointer;
-      transition: .15s ease;
+      transition: all 0.15s ease;
     }
 
-    .action-card:hover,
-    .action-card.selected {
+    .action-card:hover, .action-card.selected {
       border-color: #c7d2fe;
-      box-shadow: 0 3px 12px #4f46e510;
+      box-shadow: 0 4px 12px rgba(79, 70, 229, 0.07);
     }
 
     .checkbox {
-      width: 18px;
-      height: 18px;
+      width: 20px;
+      height: 20px;
       flex-shrink: 0;
       display: flex;
       align-items: center;
       justify-content: center;
-      box-sizing: border-box;
       border: 1.5px solid #cbd5e1;
       border-radius: 5px;
       color: white;
-      font-size: 10px;
+      font-size: 11px;
       cursor: pointer;
     }
 
@@ -785,9 +695,9 @@ interface ActionItem {
 
     .action-title-row h2 {
       margin: 0;
-      color: #334155;
-      font-size: 12px;
-      font-weight: 650;
+      color: #1e293b;
+      font-size: 13px;
+      font-weight: 700;
     }
 
     .completed-title {
@@ -795,89 +705,63 @@ interface ActionItem {
       text-decoration: line-through;
     }
 
+    .priority {
+      padding: 2px 7px;
+      border-radius: 4px;
+      font-size: 9px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .priority.critical { background: #fee2e2; color: #dc2626; }
+    .priority.high { background: #fff7ed; color: #ea580c; }
+    .priority.medium { background: #f1f5f9; color: #475569; }
+    .priority.low { background: #f8fafc; color: #94a3b8; }
+
     .description {
-      margin: 5px 0 8px;
-      overflow: hidden;
+      margin: 4px 0 6px;
+      font-size: 11px;
       color: #64748b;
-      font-size: 10px;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+      line-height: 1.4;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
     }
 
     .action-meta {
       display: flex;
       align-items: center;
-      gap: 6px;
+      gap: 8px;
+      font-size: 10px;
       color: #94a3b8;
-      font-size: 9px;
+      flex-wrap: wrap;
     }
 
     .owner {
       display: flex;
       align-items: center;
-      gap: 5px;
+      gap: 4px;
+      color: #334155;
+      font-weight: 500;
     }
 
     .mini-avatar {
-      width: 19px;
-      height: 19px;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      color: white;
+      font-size: 7px;
+      font-weight: 700;
       display: flex;
       align-items: center;
       justify-content: center;
-      border-radius: 50%;
-      background: #e0e7ff;
-      color: #4f46e5;
-      font-size: 7px;
-      font-weight: 700;
     }
 
     .due.overdue {
       color: #dc2626;
-      font-weight: 600;
-    }
-
-    /* BADGES */
-
-    .priority,
-    .status {
-      display: inline-flex;
-      align-items: center;
-      width: fit-content;
-      padding: 4px 7px;
-      border-radius: 999px;
-      font-size: 8px;
       font-weight: 700;
-      white-space: nowrap;
-    }
-
-    .priority.high {
-      background: #fef2f2;
-      color: #dc2626;
-    }
-
-    .priority.medium {
-      background: #fff7ed;
-      color: #ea580c;
-    }
-
-    .priority.low {
-      background: #f1f5f9;
-      color: #64748b;
-    }
-
-    .status.open {
-      background: #eff6ff;
-      color: #2563eb;
-    }
-
-    .status.progress {
-      background: #fff7ed;
-      color: #ea580c;
-    }
-
-    .status.completed {
-      background: #ecfdf5;
-      color: #059669;
     }
 
     .action-right {
@@ -887,669 +771,591 @@ interface ActionItem {
       flex-shrink: 0;
     }
 
-    .confidence {
-      color: #059669;
-      font-size: 9px;
+    .status-pill {
+      font-size: 10px;
       font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 999px;
+    }
+
+    .status-pill.open { background: #f8fafc; color: #64748b; }
+    .status-pill.progress { background: #eff6ff; color: #2563eb; }
+    .status-pill.review { background: #fff7ed; color: #ea580c; }
+    .status-pill.completed { background: #ecfdf5; color: #059669; }
+
+    .confidence {
+      font-size: 10px;
+      color: #94a3b8;
     }
 
     .arrow {
-      color: #94a3b8;
-      font-size: 17px;
+      color: #cbd5e1;
+      font-size: 16px;
     }
 
-    /* DETAIL */
-
+    /* DETAIL PANEL */
     .detail-panel {
-      position: sticky;
-      top: 20px;
-      align-self: start;
-      overflow: hidden;
       background: white;
       border: 1px solid #e2e8f0;
-      border-radius: 11px;
+      border-radius: 12px;
+      padding: 22px;
+      display: flex;
+      flex-direction: column;
+      position: sticky;
+      top: 88px;
+      height: fit-content;
+      max-height: calc(100vh - 120px);
+      overflow-y: auto;
     }
 
     .detail-header {
       display: flex;
-      align-items: flex-start;
       justify-content: space-between;
-      padding: 19px;
+      align-items: flex-start;
+      margin-bottom: 16px;
+      padding-bottom: 12px;
       border-bottom: 1px solid #f1f5f9;
     }
 
     .detail-label {
-      color: #6366f1;
-      font-size: 8px;
+      font-size: 9px;
       font-weight: 800;
-      letter-spacing: 1.2px;
+      letter-spacing: 1px;
+      color: #6366f1;
     }
 
     .detail-header h2 {
-      margin: 5px 0 0;
-      color: #1e293b;
-      font-size: 15px;
+      margin: 2px 0 0;
+      font-size: 16px;
+      color: #0f172a;
     }
 
     .close-button {
       border: 0;
       background: transparent;
-      color: #94a3b8;
       font-size: 22px;
+      color: #94a3b8;
       cursor: pointer;
     }
 
-    .detail-content {
-      padding: 20px;
-    }
-
     .detail-content h3 {
-      margin: 14px 0 8px;
-      color: #1e293b;
-      font-size: 16px;
-      line-height: 1.4;
+      margin: 10px 0 6px;
+      font-size: 14px;
+      font-weight: 700;
+      color: #0f172a;
     }
 
     .detail-description {
-      margin: 0 0 23px;
-      color: #64748b;
-      font-size: 11px;
-      line-height: 1.7;
+      font-size: 12px;
+      color: #475569;
+      line-height: 1.5;
+      margin-bottom: 18px;
     }
 
     .detail-section {
-      padding: 17px 0;
-      border-top: 1px solid #f1f5f9;
+      margin-bottom: 16px;
     }
 
     .section-label {
       display: block;
-      margin-bottom: 10px;
-      color: #94a3b8;
-      font-size: 8px;
+      font-size: 9px;
       font-weight: 800;
-      letter-spacing: 1px;
+      color: #94a3b8;
+      letter-spacing: 0.8px;
+      margin-bottom: 6px;
     }
 
     .status-control {
-      display: flex;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
       gap: 4px;
-      padding: 3px;
-      background: #f8fafc;
-      border-radius: 7px;
+      background: #f1f5f9;
+      padding: 4px;
+      border-radius: 8px;
     }
 
     .status-control button {
-      flex: 1;
-      padding: 7px 4px;
       border: 0;
-      border-radius: 5px;
+      border-radius: 6px;
+      padding: 6px 4px;
       background: transparent;
       color: #64748b;
-      font-size: 9px;
+      font-size: 10px;
+      font-weight: 600;
       cursor: pointer;
     }
 
     .status-control button.active {
       background: white;
       color: #4f46e5;
-      font-weight: 700;
-      box-shadow: 0 1px 3px #0000000b;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
     }
 
-    .detail-person,
-    .deadline,
-    .source-meeting {
+    .detail-person {
       display: flex;
       align-items: center;
-      gap: 9px;
+      gap: 10px;
     }
 
     .large-avatar {
-      width: 34px;
-      height: 34px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      width: 32px;
+      height: 32px;
       border-radius: 50%;
-      background: #e0e7ff;
-      color: #4f46e5;
-      font-size: 9px;
+      color: white;
+      font-size: 11px;
       font-weight: 700;
-    }
-
-    .detail-person strong,
-    .detail-person span,
-    .deadline strong,
-    .deadline span,
-    .source-meeting strong,
-    .source-meeting span {
-      display: block;
-    }
-
-    .detail-person strong,
-    .deadline strong,
-    .source-meeting strong {
-      color: #334155;
-      font-size: 10px;
-    }
-
-    .detail-person span,
-    .deadline span,
-    .source-meeting span {
-      margin-top: 3px;
-      color: #94a3b8;
-      font-size: 9px;
-    }
-
-    .calendar-icon {
-      width: 31px;
-      height: 31px;
       display: flex;
       align-items: center;
       justify-content: center;
-      border-radius: 7px;
-      background: #eff6ff;
-      color: #2563eb;
     }
 
-    .deadline .red {
+    .detail-person strong {
+      display: block;
+      font-size: 12px;
+      color: #0f172a;
+    }
+
+    .detail-person span {
+      font-size: 10px;
+      color: #94a3b8;
+    }
+
+    .deadline {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+    }
+
+    .deadline strong {
+      color: #1e293b;
+    }
+
+    .deadline span.red {
       color: #dc2626;
+      font-weight: 700;
+      margin-left: 6px;
+    }
+
+    .source-meeting {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 12px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      text-decoration: none;
+      color: inherit;
+    }
+
+    .source-meeting:hover {
+      border-color: #c7d2fe;
     }
 
     .source-icon {
-      width: 31px;
-      height: 31px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      border-radius: 7px;
-      background: #eef2ff;
       color: #4f46e5;
+      font-size: 14px;
+    }
+
+    .source-meeting strong {
+      display: block;
+      font-size: 11px;
+      color: #0f172a;
+    }
+
+    .source-meeting span {
+      font-size: 10px;
+      color: #94a3b8;
     }
 
     .source-arrow {
       margin-left: auto;
-      color: #94a3b8 !important;
-      font-size: 14px !important;
+      color: #4f46e5;
     }
 
     .confidence-bar {
       display: flex;
       align-items: center;
-      gap: 9px;
+      gap: 10px;
     }
 
     .bar-background {
       flex: 1;
       height: 6px;
-      overflow: hidden;
-      border-radius: 999px;
       background: #e2e8f0;
+      border-radius: 999px;
+      overflow: hidden;
     }
 
     .bar-fill {
       height: 100%;
-      border-radius: inherit;
-      background: #10b981;
-    }
-
-    .confidence-bar strong {
-      color: #059669;
-      font-size: 10px;
+      background: #059669;
+      border-radius: 999px;
     }
 
     .confidence-help {
-      margin: 8px 0 0;
+      margin: 6px 0 0;
+      font-size: 10px;
       color: #94a3b8;
-      font-size: 9px;
-      line-height: 1.5;
+      line-height: 1.4;
     }
 
     .detail-footer {
       display: flex;
-      gap: 7px;
-      padding: 14px 19px;
+      justify-content: space-between;
+      gap: 10px;
       border-top: 1px solid #f1f5f9;
+      padding-top: 14px;
+      margin-top: 14px;
     }
 
-    .secondary-button,
-    .complete-button {
-      flex: 1;
-      padding: 9px;
+    .delete-button {
+      padding: 8px 14px;
+      border: 1px solid #fecaca;
       border-radius: 7px;
-      font-size: 10px;
+      background: white;
+      color: #dc2626;
+      font-size: 11px;
       font-weight: 600;
       cursor: pointer;
     }
 
-    .secondary-button {
-      border: 1px solid #e2e8f0;
-      background: white;
-      color: #64748b;
-    }
-
     .complete-button {
+      flex: 1;
+      padding: 8px 16px;
       border: 0;
+      border-radius: 7px;
       background: #4f46e5;
       color: white;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
     }
 
-    /* EMPTY */
-
+    /* EMPTY STATE */
     .empty-state {
-      padding: 70px 20px;
-      text-align: center;
       background: white;
-      border: 1px solid #e2e8f0;
-      border-radius: 10px;
+      border: 1px dashed #cbd5e1;
+      border-radius: 12px;
+      padding: 48px 20px;
+      text-align: center;
     }
 
     .empty-icon {
-      width: 42px;
-      height: 42px;
-      margin: 0 auto 13px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      border-radius: 50%;
-      background: #ecfdf5;
-      color: #059669;
+      font-size: 32px;
+      color: #10b981;
+      margin-bottom: 10px;
     }
 
     .empty-state h2 {
-      margin: 0;
-      color: #334155;
-      font-size: 14px;
+      margin: 0 0 4px;
+      font-size: 15px;
+      color: #1e293b;
     }
 
     .empty-state p {
-      color: #94a3b8;
-      font-size: 10px;
+      margin: 0;
+      font-size: 12px;
+      color: #64748b;
     }
 
-    @media (max-width: 1000px) {
-      .content-layout:has(.detail-panel) {
-        grid-template-columns: 1fr;
-      }
+    /* MODAL */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.45);
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
 
-      .detail-panel {
-        position: static;
-      }
+    .modal-window {
+      background: white;
+      border-radius: 12px;
+      width: 100%;
+      max-width: 520px;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+      overflow: hidden;
+    }
 
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px 20px;
+      border-bottom: 1px solid #e2e8f0;
+    }
+
+    .modal-header h2 {
+      margin: 0;
+      font-size: 16px;
+      color: #0f172a;
+    }
+
+    .modal-body {
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      flex: 1;
+    }
+
+    .form-group label {
+      font-size: 11px;
+      font-weight: 600;
+      color: #475569;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .form-group input, .form-group textarea, .form-group select {
+      border: 1px solid #cbd5e1;
+      border-radius: 7px;
+      padding: 8px 10px;
+      font-size: 12px;
+      outline: 0;
+    }
+
+    .form-group input:focus, .form-group textarea:focus, .form-group select:focus {
+      border-color: #6366f1;
+    }
+
+    .form-row {
+      display: flex;
+      gap: 12px;
+    }
+
+    .modal-footer {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 14px 20px;
+      background: #f8fafc;
+      border-top: 1px solid #e2e8f0;
+    }
+
+    .btn-cancel {
+      padding: 8px 14px;
+      border: 1px solid #cbd5e1;
+      background: white;
+      border-radius: 6px;
+      font-size: 12px;
+      color: #475569;
+      cursor: pointer;
+    }
+
+    .btn-save {
+      padding: 8px 16px;
+      border: 0;
+      background: #4f46e5;
+      color: white;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    @media (max-width: 900px) {
       .summary-grid {
         grid-template-columns: repeat(2, 1fr);
       }
+      .content-layout:has(.detail-panel) {
+        grid-template-columns: 1fr;
+      }
     }
 
-    @media (max-width: 700px) {
-      .page-header,
-      .toolbar {
-        display: block;
-      }
-
-      .toolbar-actions {
-        margin-top: 10px;
-      }
-
-      .search-box {
-        flex: 1;
-      }
-
-      .action-right {
-        display: none;
-      }
-
+    @media (max-width: 600px) {
       .summary-grid {
-        grid-template-columns: 1fr 1fr;
+        grid-template-columns: 1fr;
+      }
+      .toolbar {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      .search-box {
+        width: 100%;
       }
     }
   `]
 })
 export class ActionWorkspaceComponent {
+  readonly store = inject(StoreService);
 
-  filter: 'all' | 'open' | 'due' | 'completed' = 'all';
+  readonly filter = signal<'all' | 'my' | 'open' | 'due' | 'overdue' | 'completed'>('all');
+  readonly priorityFilter = signal<string>('all');
+  readonly searchTerm = signal<string>('');
+  readonly selectedAction = signal<ActionItemView | null>(null);
+  readonly showCreateModal = signal(false);
 
-  searchTerm = '';
+  readonly mappedActions = computed<ActionItemView[]>(() => {
+    return this.store.actions().map(a => {
+      let statusLabel = 'Open';
+      if (a.status === 'in-progress') statusLabel = 'In Progress';
+      else if (a.status === 'review') statusLabel = 'Review';
+      else if (a.status === 'done') statusLabel = 'Completed';
 
-  selectedAction: ActionItem | null = null;
+      return {
+        id: a.id,
+        title: a.title,
+        description: a.description,
+        owner: a.owner.name,
+        ownerId: a.owner.id,
+        ownerInitials: a.owner.initials,
+        ownerColor: a.owner.color,
+        meeting: a.meetingTitle,
+        meetingId: a.meetingId,
+        dueDate: a.dueDate,
+        priority: a.priority.charAt(0).toUpperCase() + a.priority.slice(1),
+        status: statusLabel,
+        confidence: a.confidence || 95,
+        createdAt: a.createdAt || 'Recent',
+        raw: a
+      };
+    });
+  });
 
-  actions: ActionItem[] = [
-    {
-      id: 'action-001',
-      title: 'Prepare OAuth2 implementation plan',
-      description:
-        'Create the implementation plan for OAuth2 authentication and short-lived access tokens.',
-      owner: 'Sarah Miller',
-      ownerInitials: 'SM',
-      meeting: 'Weekly Engineering Sync',
-      meetingId: 'weekly-engineering',
-      dueDate: 'Mar 18, 2026',
-      priority: 'High',
-      status: 'Open',
-      confidence: 97,
-      createdAt: 'Mar 14, 2026'
-    },
+  readonly myTasksCount = computed(() => {
+    const curUser = this.store.currentUser();
+    return this.mappedActions().filter(a => a.ownerId === curUser.id).length;
+  });
 
-    {
-      id: 'action-002',
-      title: 'Schedule security review',
-      description:
-        'Coordinate a security review before the authentication implementation reaches production.',
-      owner: 'David Chen',
-      ownerInitials: 'DC',
-      meeting: 'Architecture Review',
-      meetingId: 'architecture-review',
-      dueDate: 'Mar 19, 2026',
-      priority: 'Medium',
-      status: 'In Progress',
-      confidence: 94,
-      createdAt: 'Mar 13, 2026'
-    },
+  readonly filteredActions = computed(() => {
+    let list = this.mappedActions();
+    const curUserId = this.store.currentUser().id;
 
-    {
-      id: 'action-003',
-      title: 'Update migration documentation',
-      description:
-        'Update the database migration documentation to reflect the revised staging timeline.',
-      owner: 'James Wilson',
-      ownerInitials: 'JW',
-      meeting: 'Weekly Engineering Sync',
-      meetingId: 'weekly-engineering',
-      dueDate: 'Mar 21, 2026',
-      priority: 'Low',
-      status: 'Open',
-      confidence: 91,
-      createdAt: 'Mar 14, 2026'
-    },
-
-    {
-      id: 'action-004',
-      title: 'Review API error handling',
-      description:
-        'Review the current API error handling strategy and document the recommended changes.',
-      owner: 'Michael Lee',
-      ownerInitials: 'ML',
-      meeting: 'Product Planning — Q2',
-      meetingId: 'product-planning',
-      dueDate: 'Mar 17, 2026',
-      priority: 'High',
-      status: 'Open',
-      confidence: 88,
-      createdAt: 'Mar 13, 2026'
-    },
-
-    {
-      id: 'action-005',
-      title: 'Create authentication test cases',
-      description:
-        'Create automated test cases covering OAuth2 login, refresh and token expiration.',
-      owner: 'Sarah Miller',
-      ownerInitials: 'SM',
-      meeting: 'Architecture Review',
-      meetingId: 'architecture-review',
-      dueDate: 'Mar 22, 2026',
-      priority: 'Medium',
-      status: 'Open',
-      confidence: 95,
-      createdAt: 'Mar 13, 2026'
-    },
-
-    {
-      id: 'action-006',
-      title: 'Send Q2 roadmap to leadership',
-      description:
-        'Share the updated Q2 engineering roadmap with the leadership team.',
-      owner: 'Ahmed Hassan',
-      ownerInitials: 'AH',
-      meeting: 'Product Planning — Q2',
-      meetingId: 'product-planning',
-      dueDate: 'Mar 15, 2026',
-      priority: 'Medium',
-      status: 'Completed',
-      confidence: 99,
-      createdAt: 'Mar 13, 2026'
-    },
-
-    {
-      id: 'action-007',
-      title: 'Prepare staging environment',
-      description:
-        'Prepare the staging environment for the upcoming database migration.',
-      owner: 'James Wilson',
-      ownerInitials: 'JW',
-      meeting: 'Weekly Engineering Sync',
-      meetingId: 'weekly-engineering',
-      dueDate: 'Mar 16, 2026',
-      priority: 'High',
-      status: 'Completed',
-      confidence: 96,
-      createdAt: 'Mar 14, 2026'
-    },
-
-    {
-      id: 'action-008',
-      title: 'Review frontend authentication flow',
-      description:
-        'Validate the frontend authentication flow against the new API authentication strategy.',
-      owner: 'Michael Lee',
-      ownerInitials: 'ML',
-      meeting: 'Design & Engineering Sync',
-      meetingId: 'design-sync',
-      dueDate: 'Mar 24, 2026',
-      priority: 'Low',
-      status: 'Open',
-      confidence: 86,
-      createdAt: 'Mar 12, 2026'
+    // View filter
+    const f = this.filter();
+    if (f === 'my') {
+      list = list.filter(a => a.ownerId === curUserId);
+    } else if (f === 'open') {
+      list = list.filter(a => a.status !== 'Completed');
+    } else if (f === 'due') {
+      list = list.filter(a => a.status !== 'Completed' && this.isDueSoon(a));
+    } else if (f === 'overdue') {
+      list = list.filter(a => this.isOverdue(a));
+    } else if (f === 'completed') {
+      list = list.filter(a => a.status === 'Completed');
     }
-  ];
 
+    // Priority filter
+    const pri = this.priorityFilter();
+    if (pri !== 'all') {
+      list = list.filter(a => a.priority.toLowerCase() === pri.toLowerCase());
+    }
 
-  get filteredActions(): ActionItem[] {
-
-    let result = this.actions;
-
-    if (this.filter === 'open') {
-      result = result.filter(
-        action =>
-          action.status === 'Open' ||
-          action.status === 'In Progress'
+    // Search query
+    const q = this.searchTerm().toLowerCase().trim();
+    if (q) {
+      list = list.filter(a =>
+        a.title.toLowerCase().includes(q) ||
+        a.description.toLowerCase().includes(q) ||
+        a.owner.toLowerCase().includes(q) ||
+        a.meeting.toLowerCase().includes(q)
       );
     }
 
-    if (this.filter === 'due') {
-      result = result.filter(
-        action =>
-          action.status !== 'Completed' &&
-          this.isDueSoon(action)
-      );
-    }
+    return list;
+  });
 
-    if (this.filter === 'completed') {
-      result = result.filter(
-        action => action.status === 'Completed'
-      );
-    }
-
-    if (this.searchTerm.trim()) {
-      const search = this.searchTerm.toLowerCase();
-
-      result = result.filter(action =>
-        action.title.toLowerCase().includes(search) ||
-        action.description.toLowerCase().includes(search) ||
-        action.owner.toLowerCase().includes(search) ||
-        action.meeting.toLowerCase().includes(search)
-      );
-    }
-
-    return result;
+  onSearch(e: Event): void {
+    this.searchTerm.set((e.target as HTMLInputElement).value);
   }
 
-
-  get openCount(): number {
-    return this.actions.filter(
-      action =>
-        action.status === 'Open' ||
-        action.status === 'In Progress'
-    ).length;
+  selectAction(action: ActionItemView): void {
+    this.selectedAction.set(action);
   }
 
+  toggleComplete(action: ActionItemView, e: MouseEvent): void {
+    e.stopPropagation();
+    const newStatus: ActionStatus = action.status === 'Completed' ? 'in-progress' : 'done';
+    this.store.updateActionStatus(action.id, newStatus);
 
-  get completedCount(): number {
-    return this.actions.filter(
-      action => action.status === 'Completed'
-    ).length;
-  }
-
-
-  get dueSoonCount(): number {
-    return this.actions.filter(
-      action =>
-        action.status !== 'Completed' &&
-        this.isDueSoon(action)
-    ).length;
-  }
-
-
-  setFilter(
-    filter: 'all' | 'open' | 'due' | 'completed'
-  ): void {
-    this.filter = filter;
-  }
-
-
-  selectAction(action: ActionItem): void {
-    this.selectedAction = action;
-  }
-
-
-  clearSelection(): void {
-    this.selectedAction = null;
-  }
-
-
-  toggleComplete(
-    action: ActionItem,
-    event: MouseEvent
-  ): void {
-
-    event.stopPropagation();
-
-    action.status =
-      action.status === 'Completed'
-        ? 'Open'
-        : 'Completed';
-
-    if (this.selectedAction?.id === action.id) {
-      this.selectedAction = action;
+    if (this.selectedAction()?.id === action.id) {
+      const updated = this.mappedActions().find(a => a.id === action.id);
+      this.selectedAction.set(updated || null);
     }
   }
 
+  toggleCompleteSelected(): void {
+    const sel = this.selectedAction();
+    if (!sel) return;
+    const newStatus: ActionStatus = sel.status === 'Completed' ? 'in-progress' : 'done';
+    this.store.updateActionStatus(sel.id, newStatus);
+    const updated = this.mappedActions().find(a => a.id === sel.id);
+    this.selectedAction.set(updated || null);
+  }
 
   changeStatus(status: ActionStatus): void {
+    const sel = this.selectedAction();
+    if (!sel) return;
+    this.store.updateActionStatus(sel.id, status);
+    const updated = this.mappedActions().find(a => a.id === sel.id);
+    this.selectedAction.set(updated || null);
+  }
 
-    if (!this.selectedAction) {
-      return;
+  deleteCurrentAction(): void {
+    const sel = this.selectedAction();
+    if (!sel) return;
+    this.store.deleteAction(sel.id);
+    this.selectedAction.set(null);
+  }
+
+  openCreateModal(): void {
+    this.showCreateModal.set(true);
+  }
+
+  saveNewAction(title: string, desc: string, ownerId: string, priority: string, due: string, meetingId: string): void {
+    if (!title.trim()) return;
+
+    const owner = this.store.users().find(u => u.id === ownerId) || this.store.currentUser();
+    const meeting = this.store.meetings().find(m => m.id === meetingId) || this.store.meetings()[0];
+
+    const created = this.store.createAction({
+      title: title.trim(),
+      description: desc.trim() || 'Committed task',
+      status: 'backlog',
+      priority: priority as Priority,
+      owner,
+      dueDate: due.trim() || 'Mar 25, 2026',
+      meetingId: meeting.id,
+      meetingTitle: meeting.title,
+      confidence: 100
+    });
+
+    this.showCreateModal.set(false);
+    const createdView = this.mappedActions().find(a => a.id === created.id);
+    if (createdView) {
+      this.selectedAction.set(createdView);
     }
-
-    this.selectedAction.status = status;
   }
 
-
-  completeSelected(): void {
-
-    if (!this.selectedAction) {
-      return;
-    }
-
-    this.selectedAction.status =
-      this.selectedAction.status === 'Completed'
-        ? 'Open'
-        : 'Completed';
-  }
-
-
-  createAction(): void {
-
-    const newAction: ActionItem = {
-      id: `action-${Date.now()}`,
-      title: 'New action',
-      description: 'Add the action description.',
-      owner: 'Ahmed Hassan',
-      ownerInitials: 'AH',
-      meeting: 'Manually created',
-      meetingId: '',
-      dueDate: 'No deadline',
-      priority: 'Medium',
-      status: 'Open',
-      confidence: 100,
-      createdAt: 'Just now'
-    };
-
-    this.actions = [
-      newAction,
-      ...this.actions
-    ];
-
-    this.selectedAction = newAction;
-  }
-
-
-  onSearch(event: Event): void {
-    const input = event.target as HTMLInputElement;
-    this.searchTerm = input.value;
-  }
-
-
-  isDueSoon(action: ActionItem): boolean {
-
-    if (action.dueDate === 'No deadline') {
-      return false;
-    }
-
+  isDueSoon(action: ActionItemView): boolean {
+    if (action.dueDate === 'No deadline') return false;
     const due = new Date(action.dueDate);
-    const today = new Date();
-
-    const difference =
-      due.getTime() - today.getTime();
-
-    const days =
-      difference / (1000 * 60 * 60 * 24);
-
-    return days <= 3;
+    const now = new Date('2026-03-15T00:00:00');
+    const diff = (due.getTime() - now.getTime()) / (1000 * 60 * 60 * 24);
+    return diff >= 0 && diff <= 4;
   }
 
-
-  isOverdue(action: ActionItem): boolean {
-
-    if (action.dueDate === 'No deadline') {
-      return false;
-    }
-
+  isOverdue(action: ActionItemView): boolean {
+    if (action.dueDate === 'No deadline' || action.status === 'Completed') return false;
     const due = new Date(action.dueDate);
-    const today = new Date();
-
-    return (
-      due.getTime() < today.getTime() &&
-      action.status !== 'Completed'
-    );
+    const now = new Date('2026-03-15T00:00:00');
+    return due.getTime() < now.getTime();
   }
 
-
-  deadlineText(action: ActionItem): string {
-
-    if (action.dueDate === 'No deadline') {
-      return 'No deadline';
-    }
-
-    if (this.isOverdue(action)) {
-      return 'Overdue';
-    }
-
-    if (this.isDueSoon(action)) {
-      return 'Due soon';
-    }
-
+  deadlineText(action: ActionItemView): string {
+    if (this.isOverdue(action)) return 'Overdue';
+    if (this.isDueSoon(action)) return 'Due soon';
     return 'Upcoming';
   }
 }

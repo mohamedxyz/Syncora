@@ -1,6 +1,6 @@
-
-import { Component } from '@angular/core';
+import { Component, inject } from '@angular/core';
 import { RouterLink, RouterLinkActive } from '@angular/router';
+import { StoreService } from '../../../core/services/store.service';
 
 @Component({
   selector: 'app-sidebar',
@@ -47,6 +47,7 @@ import { RouterLink, RouterLinkActive } from '@angular/router';
         >
           <span class="icon">◫</span>
           Meetings
+          <span class="count-badge">{{ store.meetings().length }}</span>
         </a>
 
         <a
@@ -56,6 +57,9 @@ import { RouterLink, RouterLinkActive } from '@angular/router';
         >
           <span class="icon">✓</span>
           Actions
+          @if (store.openActions().length > 0) {
+            <span class="count-badge">{{ store.openActions().length }}</span>
+          }
         </a>
 
         <a
@@ -75,7 +79,9 @@ import { RouterLink, RouterLinkActive } from '@angular/router';
           <span class="icon">!</span>
           Conflicts
 
-          <span class="conflict-count">3</span>
+          @if (store.unresolvedConflicts().length > 0) {
+            <span class="conflict-count">{{ store.unresolvedConflicts().length }}</span>
+          }
         </a>
 
         <div class="nav-section">
@@ -115,13 +121,13 @@ import { RouterLink, RouterLinkActive } from '@angular/router';
 
         <div class="user">
 
-          <div class="avatar">
-            AH
+          <div class="avatar" [style.background]="store.currentUser().color">
+            {{ store.currentUser().initials }}
           </div>
 
           <div class="user-info">
-            <strong>Ahmed Hassan</strong>
-            <span>Administrator</span>
+            <strong>{{ store.currentUser().name }}</strong>
+            <span>{{ store.currentUser().role || 'Administrator' }}</span>
           </div>
 
         </div>
@@ -142,6 +148,7 @@ import { RouterLink, RouterLinkActive } from '@angular/router';
 
       display: flex;
       flex-direction: column;
+      flex-shrink: 0;
     }
 
     .logo {
@@ -187,10 +194,11 @@ import { RouterLink, RouterLinkActive } from '@angular/router';
       display: flex;
       flex-direction: column;
       gap: 4px;
+      flex: 1;
     }
 
     .nav-section {
-      margin: 20px 10px 7px;
+      margin: 18px 10px 7px;
 
       color: #94a3b8;
       font-size: 10px;
@@ -205,13 +213,13 @@ import { RouterLink, RouterLinkActive } from '@angular/router';
       align-items: center;
       gap: 12px;
 
-      padding: 10px 12px;
+      padding: 9px 12px;
       border-radius: 8px;
 
       color: #64748b;
       text-decoration: none;
 
-      font-size: 14px;
+      font-size: 13px;
       font-weight: 500;
 
       transition: 0.15s ease;
@@ -231,7 +239,17 @@ import { RouterLink, RouterLinkActive } from '@angular/router';
     .icon {
       width: 20px;
       text-align: center;
-      font-size: 16px;
+      font-size: 15px;
+    }
+
+    .count-badge {
+      margin-left: auto;
+      font-size: 11px;
+      color: #94a3b8;
+      font-weight: 600;
+      background: #f1f5f9;
+      padding: 1px 7px;
+      border-radius: 999px;
     }
 
     .conflict-count {
@@ -251,6 +269,7 @@ import { RouterLink, RouterLinkActive } from '@angular/router';
 
       font-size: 11px;
       font-weight: 700;
+      padding: 0 6px;
     }
 
     .sidebar-bottom {
@@ -279,7 +298,7 @@ import { RouterLink, RouterLinkActive } from '@angular/router';
       border-radius: 50%;
 
       background: #e0e7ff;
-      color: #4f46e5;
+      color: white;
 
       font-size: 11px;
       font-weight: 700;
@@ -294,6 +313,9 @@ import { RouterLink, RouterLinkActive } from '@angular/router';
     .user-info strong {
       color: #0f172a;
       font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     .user-info span {
@@ -301,6 +323,30 @@ import { RouterLink, RouterLinkActive } from '@angular/router';
       color: #94a3b8;
       font-size: 10px;
     }
+
+    @media (max-width: 768px) {
+      .sidebar {
+        width: 70px;
+        padding: 16px 8px;
+      }
+      .logo-name, .logo-subtitle, .nav-section, .nav-item span:not(.icon), .user-info {
+        display: none;
+      }
+      .logo {
+        justify-content: center;
+        padding: 0 0 20px;
+      }
+      .nav-item {
+        justify-content: center;
+        padding: 10px;
+      }
+      .user {
+        justify-content: center;
+        padding: 8px 0;
+      }
+    }
   `]
 })
-export class SidebarComponent {}
+export class SidebarComponent {
+  readonly store = inject(StoreService);
+}

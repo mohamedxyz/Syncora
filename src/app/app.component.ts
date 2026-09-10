@@ -36,10 +36,21 @@ import { HeaderComponent } from './shared/components/header/header.component';
     .main-area {
       flex: 1;
       min-width: 0;
+      display: flex;
+      flex-direction: column;
     }
 
     .page-content {
-      padding: 32px;
+      padding: 28px 32px 48px;
+      flex: 1;
+      max-width: 100%;
+      box-sizing: border-box;
+    }
+
+    @media (max-width: 768px) {
+      .page-content {
+        padding: 16px 16px 36px;
+      }
     }
   `]
 })
